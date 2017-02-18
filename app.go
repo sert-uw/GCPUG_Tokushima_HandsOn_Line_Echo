@@ -21,12 +21,15 @@ import (
 
 var botHandler *httphandler.WebhookHandler
 
+// GAEインスタンス起動時に行われる処理
 func init() {
+	// line.envの読み込み
 	err := godotenv.Load("line.env")
 	if err != nil {
 		panic(err)
 	}
 
+	// lineのhttphandlerを設定
 	botHandler, err = httphandler.New(
 		os.Getenv("LINE_BOT_CHANNEL_SECRET"),
 		os.Getenv("LINE_BOT_CHANNEL_TOKEN"),
@@ -37,14 +40,14 @@ func init() {
 	http.HandleFunc("/task", handleTask)
 }
 
-// handleCallback is Webgook endpoint
+// webhook の受付関数
 func handleCallback(evs []*linebot.Event, r *http.Request) {
 	c := newContext(r)
 	ts := make([]*taskqueue.Task, len(evs))
 	for i, e := range evs {
 		j, err := json.Marshal(e)
 		if err != nil {
-			errorf(c, "json.Marshal: %v", err)
+			log.Errorf(c, "json.Marshal: %v", err)
 			return
 		}
 		data := base64.StdEncoding.EncodeToString(j)
@@ -54,60 +57,56 @@ func handleCallback(evs []*linebot.Event, r *http.Request) {
 	taskqueue.AddMulti(c, ts, "")
 }
 
-// handleTask is process event handler
+// 受信したメッセージへの返信処理
 func handleTask(w http.ResponseWriter, r *http.Request) {
 	c := newContext(r)
 	data := r.FormValue("data")
 
 	if data == "" {
-		errorf(c, "No data")
+		log.Errorf(c, "No data")
 		return
 	}
 
+	// メッセージJSONのパース
 	j, err := base64.StdEncoding.DecodeString(data)
 	if err != nil {
-		errorf(c, "base64 DecodeString: %v", err)
+		log.Errorf(c, "base64 DecodeString: %v", err)
 		return
 	}
 
 	e := new(linebot.Event)
 	err = json.Unmarshal(j, e)
 	if err != nil {
-		errorf(c, "json.Unmarshal: %v", err)
+		log.Errorf(c, "json.Unmarshal: %v", err)
 		return
 	}
 
+	// LINE bot 変数の生成
 	bot, err := newLINEBot(c)
 	if err != nil {
-		errorf(c, "newLINEBot: %v", err)
+		log.Errorf(c, "newLINEBot: %v", err)
 		return
 	}
 
-	logf(c, "EventType: %s\nMessage: %#v", e.Type, e.Message)
-	var responseMessage string
+	log.Infof(c, "EventType: %s\nMessage: %#v", e.Type, e.Message)
+	var responseMessage linebot.Message
 
+	// 受信したメッセージのタイプチェック
 	switch message := e.Message.(type) {
+	// テキストメッセージの場合
 	case *linebot.TextMessage:
-		responseMessage = message.Text
+		responseMessage = linebot.NewTextMessage(message.Text)
 	default:
-		responseMessage = "Not text"
+		responseMessage = linebot.NewTextMessage("未対応です。。。")
 	}
 
-	m := linebot.NewTextMessage(responseMessage)
-	if _, err = bot.ReplyMessage(e.ReplyToken, m).WithContext(c).Do(); err != nil {
-		errorf(c, "ReplayMessage: %v", err)
+	// 生成したメッセージを送信する
+	if _, err = bot.ReplyMessage(e.ReplyToken, responseMessage).WithContext(c).Do(); err != nil {
+		log.Errorf(c, "ReplayMessage: %v", err)
 		return
 	}
 
 	w.WriteHeader(200)
-}
-
-func logf(c context.Context, format string, args ...interface{}) {
-	log.Infof(c, format, args...)
-}
-
-func errorf(c context.Context, format string, args ...interface{}) {
-	log.Errorf(c, format, args...)
 }
 
 func newContext(r *http.Request) context.Context {
